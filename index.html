@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Chat with Anyone</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div id="auth-screen" class="screen active">
+        <div class="auth-box">
+            <h1 class="app-title">Chat with Anyone</h1>
+            <p id="auth-subtitle">Sign in to your account</p>
+            
+            <form id="auth-form">
+                <input type="text" id="auth-name" placeholder="Full Name" style="display: none;">
+                <input type="email" id="auth-email" placeholder="Email Address" required>
+                <input type="password" id="auth-password" placeholder="Password" required>
+                <button type="submit" id="auth-btn">Sign In</button>
+            </form>
+
+            <div class="divider"><span>OR</span></div>
+            <button id="google-auth-btn">Continue with Google</button>
+
+            <p class="toggle-text">
+                <span id="toggle-auth-mode">Need an account? <b>Create one</b></span>
+            </p>
+        </div>
+    </div>
+
+    <div id="app-screen" class="screen">
+        <div id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <div class="user-profile">
+                    <div id="my-avatar" class="avatar"></div>
+                    <span id="my-name">My Name</span>
+                </div>
+                <button id="logout-btn" class="icon-btn" title="Logout">
+                    <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2" fill="none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                </button>
+            </div>
+            <div id="users-list" class="users-list">
+                </div>
+        </div>
+
+        <div id="chat-window" class="chat-window hidden-mobile">
+            <div id="no-chat-selected" class="no-chat">
+                <p>Select a user to start chatting</p>
+            </div>
+            
+            <div id="active-chat" class="active-chat hidden">
+                <div class="chat-header">
+                    <button id="back-btn" class="icon-btn mobile-only">
+                        <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2" fill="none"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+                    </button>
+                    <div id="chat-avatar" class="avatar"></div>
+                    <div class="chat-info">
+                        <h3 id="chat-name">User Name</h3>
+                        <span id="chat-status" class="status-text">Online</span>
+                    </div>
+                </div>
+                
+                <div id="messages-container" class="messages-container">
+                    </div>
+                
+                <form id="message-form" class="message-input-area">
+                    <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" required>
+                    <button type="submit" id="send-btn" class="icon-btn">
+                        <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, where, orderBy, onSnapshot, setDoc, doc, updateDoc, serverTimestamp, getDocs } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
+        // ==========================================
+        // ⚠️ INSERT YOUR FIREBASE CONFIG HERE ⚠️
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // State Variables
+        let currentUser = null;
+        let selectedUser = null;
+        let isLoginMode = true;
+        let messagesUnsubscribe = null;
+
+        // DOM Elements
+        const authScreen = document.getElementById('auth-screen');
+        const appScreen = document.getElementById('app-screen');
+        const authForm = document.getElementById('auth-form');
+        const toggleAuthMode = document.getElementById('toggle-auth-mode');
+        const googleBtn = document.getElementById('google-auth-btn');
+        const authName = document.getElementById('auth-name');
+        
+        // --- AUTHENTICATION LOGIC ---
+        toggleAuthMode.addEventListener('click', () => {
+            isLoginMode = !isLoginMode;
+            document.getElementById('auth-subtitle').innerText = isLoginMode ? "Sign in to your account" : "Create a new account";
+            document.getElementById('auth-btn').innerText = isLoginMode ? "Sign In" : "Sign Up";
+            authName.style.display = isLoginMode ? "none" : "block";
+            authName.required = !isLoginMode;
+            toggleAuthMode.innerHTML = isLoginMode ? "Need an account? <b>Create one</b>" : "Already have an account? <b>Sign in</b>";
+        });
+
+        authForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('auth-email').value;
+            const password = document.getElementById('auth-password').value;
+            const name = authName.value;
+
+            try {
+                if (isLoginMode) {
+                    await signInWithEmailAndPassword(auth, email, password);
+                } else {
+                    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                    await updateProfile(userCredential.user, { displayName: name });
+                    await saveUserToFirestore(userCredential.user, name);
+                }
+            } catch (error) {
+                alert(error.message);
+            }
+        });
+
+        googleBtn.addEventListener('click', async () => {
+            const provider = new GoogleAuthProvider();
+            try {
+                const result = await signInWithPopup(auth, provider);
+                await saveUserToFirestore(result.user, result.user.displayName);
+            } catch (error) {
+                alert(error.message);
+            }
+        });
+
+        document.getElementById('logout-btn').addEventListener('click', () => signOut(auth));
+
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                currentUser = user;
+                authScreen.classList.remove('active');
+                appScreen.classList.add('active');
+                document.getElementById('my-name').innerText = user.displayName || user.email.split('@')[0];
+                document.getElementById('my-avatar').innerText = (user.displayName || user.email).charAt(0).toUpperCase();
+                
+                // Set online status
+                await setDoc(doc(db, "Users", user.uid), { 
+                    online: true, 
+                    lastSeen: serverTimestamp() 
+                }, { merge: true });
+
+                loadUsers();
+            } else {
+                if(currentUser) {
+                    await setDoc(doc(db, "Users", currentUser.uid), { online: false }, { merge: true });
+                }
+                currentUser = null;
+                appScreen.classList.remove('active');
+                authScreen.classList.add('active');
+                document.getElementById('active-chat').classList.add('hidden');
+                document.getElementById('no-chat-selected').classList.remove('hidden');
+            }
+        });
+
+        async function saveUserToFirestore(user, name) {
+            await setDoc(doc(db, "Users", user.uid), {
+                uid: user.uid,
+                name: name || user.email.split('@')[0],
+                email: user.email,
+                online: true
+            }, { merge: true });
+        }
+
+        // --- APP LOGIC (Firestore & UI) ---
+        function loadUsers() {
+            const usersRef = collection(db, "Users");
+            onSnapshot(usersRef, (snapshot) => {
+                const usersList = document.getElementById('users-list');
+                usersList.innerHTML = '';
+                snapshot.forEach((docSnap) => {
+                    const user = docSnap.data();
+                    if (user.uid !== currentUser.uid) {
+                        const div = document.createElement('div');
+                        div.className = `user-item ${selectedUser && selectedUser.uid === user.uid ? 'active' : ''}`;
+                        div.innerHTML = `
+                            <div class="avatar">${user.name.charAt(0).toUpperCase()}</div>
+                            <div class="user-details">
+                                <h4>${user.name}</h4>
+                            </div>
+                            <div class="status-dot ${user.online ? 'online' : ''}"></div>
+                        `;
+                        div.addEventListener('click', () => openChat(user));
+                        usersList.appendChild(div);
+                    }
+                });
+            });
+        }
+
+        function openChat(user) {
+            selectedUser = user;
+            
+            // Mobile UI Switch
+            document.getElementById('sidebar').classList.add('hidden-mobile');
+            document.getElementById('chat-window').classList.remove('hidden-mobile');
+
+            document.getElementById('no-chat-selected').classList.add('hidden');
+            document.getElementById('active-chat').classList.remove('hidden');
+            
+            document.getElementById('chat-name').innerText = user.name;
+            document.getElementById('chat-avatar').innerText = user.name.charAt(0).toUpperCase();
+            
+            // Highlight active user
+            document.querySelectorAll('.user-item').forEach(el => el.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+
+            loadMessages(user.uid);
+        }
+
+        document.getElementById('back-btn').addEventListener('click', () => {
+            document.getElementById('sidebar').classList.remove('hidden-mobile');
+            document.getElementById('chat-window').classList.add('hidden-mobile');
+            selectedUser = null;
+            if(messagesUnsubscribe) messagesUnsubscribe();
+        });
+
+        function loadMessages(chatPartnerUid) {
+            if (messagesUnsubscribe) messagesUnsubscribe();
+
+            const q = query(collection(db, "Messages"), orderBy("timestamp", "asc"));
+            const container = document.getElementById('messages-container');
+            
+            messagesUnsubscribe = onSnapshot(q, (snapshot) => {
+                container.innerHTML = '';
+                snapshot.forEach((docSnap) => {
+                    const msg = docSnap.data();
+                    // Filter messages for current conversation
+                    if ((msg.sender === currentUser.uid && msg.receiver === chatPartnerUid) || 
+                        (msg.sender === chatPartnerUid && msg.receiver === currentUser.uid)) {
+                        
+                        const isMine = msg.sender === currentUser.uid;
+                        const time = msg.timestamp ? new Date(msg.timestamp.toDate()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '...';
+                        
+                        // Read receipt logic
+                        if(!isMine && msg.status !== 'read') {
+                            updateDoc(doc(db, "Messages", docSnap.id), { status: 'read' });
+                        }
+
+                        const tickColor = msg.status === 'read' ? '#34B7F1' : '#8696a0';
+                        const ticks = isMine ? `<svg viewBox="0 0 16 15" width="16" height="15"><path fill="${tickColor}" d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L8.666 9.879a.32.32 0 0 1-.484.033l-.358-.325a.319.319 0 0 0-.484.032l-.378.483a.418.418 0 0 0 .036.541l1.32 1.266c.143.14.361.125.484-.033l6.272-8.048a.366.366 0 0 0-.064-.512zm-4.1 0l-.478-.372a.365.365 0 0 0-.51.063L4.566 9.879a.32.32 0 0 1-.484.033L1.891 7.769a.366.366 0 0 0-.515.006l-.423.433a.364.364 0 0 0 .006.514l3.258 3.185c.143.14.361.125.484-.033l6.272-8.048a.365.365 0 0 0-.063-.51z"></path></svg>` : '';
+
+                        const div = document.createElement('div');
+                        div.className = `message ${isMine ? 'sent' : 'received'}`;
+                        div.innerHTML = `
+                            <p>${msg.text}</p>
+                            <span class="time">${time} ${ticks}</span>
+                        `;
+                        container.appendChild(div);
+                    }
+                });
+                container.scrollTop = container.scrollHeight;
+            });
+        }
+
+        document.getElementById('message-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!selectedUser) return;
+            
+            const input = document.getElementById('message-input');
+            const text = input.value.trim();
+            if (!text) return;
+
+            input.value = '';
+
+            await addDoc(collection(db, "Messages"), {
+                text: text,
+                sender: currentUser.uid,
+                receiver: selectedUser.uid,
+                status: 'sent',
+                timestamp: serverTimestamp()
+            });
+        });
+
+        // Handle page close for online status
+        window.addEventListener('beforeunload', () => {
+            if(currentUser) {
+                setDoc(doc(db, "Users", currentUser.uid), { online: false }, { merge: true });
+            }
+        });
+    </script>
+</body>
+</html>
