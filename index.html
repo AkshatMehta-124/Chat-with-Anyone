@@ -84,7 +84,6 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
         import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
-        // BUG FIX: Removed serverTimestamp, imported Timestamp instead
         import { getFirestore, doc, setDoc, updateDoc, collection, onSnapshot, addDoc, Timestamp, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -196,7 +195,8 @@
             });
         }
 
-        function openPrivateChat(otherUser) {
+        // BUG FIX APPLIED HERE: Creating the room FIRST before listening
+        async function openPrivateChat(otherUser) {
             currentChatUser = otherUser;
             currentChatId = currentUser.uid < otherUser.uid ? currentUser.uid + "_" + otherUser.uid : otherUser.uid + "_" + currentUser.uid;
 
@@ -205,12 +205,17 @@
 
             if (unsubscribeMessages) unsubscribeMessages();
 
+            // Make sure the room exists in the database before trying to read from it
+            await setDoc(doc(db, "chats", currentChatId), { 
+                participants: [currentUser.uid, currentChatUser.uid] 
+            }, { merge: true });
+
             const q = query(collection(db, "chats", currentChatId, "messages"), orderBy("timestamp", "asc"));
             
             unsubscribeMessages = onSnapshot(q, (snapshot) => {
                 messagesContainer.innerHTML = ""; 
-                snapshot.forEach((doc) => {
-                    const msg = doc.data({ serverTimestamps: "estimate" }); 
+                snapshot.forEach((docSnap) => {
+                    const msg = docSnap.data({ serverTimestamps: "estimate" }); 
                     const div = document.createElement("div");
                     div.className = msg.senderId === currentUser.uid ? "message my-message" : "message their-message";
                     
@@ -230,14 +235,12 @@
             });
         }
 
+        // BUG FIX APPLIED HERE: Using Timestamp.now() for instant delivery
         document.getElementById("send-btn").addEventListener("click", async () => {
             const text = messageInput.value.trim();
             if (!text || !currentChatId) return;
             messageInput.value = ""; 
 
-            await setDoc(doc(db, "chats", currentChatId), { participants: [currentUser.uid, currentChatUser.uid] }, { merge: true });
-            
-            // BUG FIX: Changed serverTimestamp() to Timestamp.now() so it shows up instantly
             await addDoc(collection(db, "chats", currentChatId, "messages"), {
                 text: text, 
                 senderId: currentUser.uid, 
