@@ -14,14 +14,29 @@
 
     <div id="login-screen" class="screen">
         <div class="auth-box">
-            <h1>Chat with Anyone</h1>
-            <p>Sign in to start messaging</p>
-            <button id="login-btn">Continue with Google</button>
+            <h1>ChatApp</h1>
+            <p>Sign in to continue</p>
+
+            <div class="input-group">
+                <input type="email" id="email-input" placeholder="Email Address">
+                <input type="password" id="password-input" placeholder="Password">
+                <button id="email-auth-btn" class="auth-btn">Sign In</button>
+            </div>
+
+            <p class="toggle-text" id="toggle-mode-text">New here? <span>Create an account</span></p>
+
+            <div class="divider">OR</div>
+
+            <button id="google-login-btn" class="google-btn">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg" alt="Google Logo" width="20">
+                Continue with Google
+            </button>
+
+            <p id="auth-error"></p>
         </div>
     </div>
 
     <div id="app-screen">
-        
         <div class="sidebar">
             <div class="sidebar-header">
                 <div class="my-profile-info">
@@ -66,7 +81,8 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
-        import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+        // Added Email Auth tools here
+        import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, updateDoc, collection, onSnapshot, addDoc, serverTimestamp, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -87,6 +103,7 @@
         let currentChatId = null;
         let currentChatUser = null;
         let unsubscribeMessages = null;
+        let isSignUpMode = false; // Tracks if we are logging in or signing up
 
         // Elements
         const loginScreen = document.getElementById("login-screen");
@@ -97,22 +114,70 @@
         const messageInput = document.getElementById("message-input");
         const chatWithName = document.getElementById("chat-with-name");
         const profileModal = document.getElementById("profile-modal");
+        const authError = document.getElementById("auth-error");
 
-        // Auth
-        document.getElementById("login-btn").addEventListener("click", () => signInWithPopup(auth, new GoogleAuthProvider()));
+        // --- AUTHENTICATION LOGIC ---
+
+        // 1. Google Login
+        document.getElementById("google-login-btn").addEventListener("click", () => {
+            signInWithPopup(auth, new GoogleAuthProvider()).catch(err => showError(err.message));
+        });
+
+        // 2. Toggle Login/Sign Up
+        document.getElementById("toggle-mode-text").addEventListener("click", () => {
+            isSignUpMode = !isSignUpMode;
+            authError.style.display = "none";
+            if (isSignUpMode) {
+                document.getElementById("email-auth-btn").textContent = "Create Account";
+                document.getElementById("toggle-mode-text").innerHTML = 'Already have an account? <span>Sign In</span>';
+            } else {
+                document.getElementById("email-auth-btn").textContent = "Sign In";
+                document.getElementById("toggle-mode-text").innerHTML = 'New here? <span>Create an account</span>';
+            }
+        });
+
+        // 3. Email/Password Login & Sign Up
+        document.getElementById("email-auth-btn").addEventListener("click", async () => {
+            const email = document.getElementById("email-input").value.trim();
+            const password = document.getElementById("password-input").value.trim();
+            
+            if (!email || !password) return showError("Please enter email and password.");
+            authError.style.display = "none";
+
+            try {
+                if (isSignUpMode) {
+                    await createUserWithEmailAndPassword(auth, email, password);
+                } else {
+                    await signInWithEmailAndPassword(auth, email, password);
+                }
+            } catch (error) {
+                showError(error.message);
+            }
+        });
+
+        function showError(msg) {
+            authError.textContent = msg;
+            authError.style.display = "block";
+        }
+
         document.getElementById("logout-btn").addEventListener("click", () => signOut(auth));
 
+        // 4. Handle State Changes (When logged in)
         onAuthStateChanged(auth, async (user) => {
             if (user) {
                 currentUser = user;
                 loginScreen.style.display = "none";
                 appScreen.style.display = "flex";
                 
-                document.getElementById("my-name").textContent = user.displayName;
-                document.getElementById("my-profile-pic").src = user.photoURL;
+                // If it's a new email user, they don't have a name/pic yet. Let's give them defaults.
+                const displayName = user.displayName || user.email.split('@')[0];
+                const photoURL = user.photoURL || "https://cdn-icons-png.flaticon.com/512/149/149071.png";
+
+                document.getElementById("my-name").textContent = displayName;
+                document.getElementById("my-profile-pic").src = photoURL;
 
                 await setDoc(doc(db, "users", user.uid), {
-                    uid: user.uid, name: user.displayName, email: user.email, photoURL: user.photoURL
+                    uid: user.uid, name: displayName, email: user.email, photoURL: photoURL
                 }, { merge: true });
 
                 loadUsers();
@@ -120,11 +185,14 @@
                 currentUser = null;
                 loginScreen.style.display = "flex";
                 appScreen.style.display = "none";
+                document.getElementById("email-input").value = "";
+                document.getElementById("password-input").value = "";
                 if (unsubscribeMessages) unsubscribeMessages();
             }
         });
 
-        // Load Users
+        // --- CHAT LOGIC ---
+
         function loadUsers() {
             onSnapshot(collection(db, "users"), (snapshot) => {
                 userList.innerHTML = ""; 
@@ -140,7 +208,6 @@
             });
         }
 
-        // Open Chat
         function openPrivateChat(otherUser) {
             currentChatUser = otherUser;
             currentChatId = currentUser.uid < otherUser.uid ? currentUser.uid + "_" + otherUser.uid : otherUser.uid + "_" + currentUser.uid;
@@ -164,7 +231,6 @@
             });
         }
 
-        // Send Message
         document.getElementById("send-btn").addEventListener("click", async () => {
             const text = messageInput.value.trim();
             if (!text || !currentChatId) return;
@@ -178,13 +244,17 @@
 
         messageInput.addEventListener("keypress", (e) => { if (e.key === "Enter") document.getElementById("send-btn").click(); });
 
-        // Profile Modal
+        // --- PROFILE EDIT LOGIC ---
+        
         document.getElementById("edit-profile-btn").addEventListener("click", () => {
-            document.getElementById("edit-name-input").value = currentUser.displayName;
-            document.getElementById("edit-pic-input").value = currentUser.photoURL;
+            // Fill with current info or defaults
+            document.getElementById("edit-name-input").value = currentUser.displayName || document.getElementById("my-name").textContent;
+            document.getElementById("edit-pic-input").value = currentUser.photoURL || document.getElementById("my-profile-pic").src;
             profileModal.style.display = "flex";
         });
+        
         document.getElementById("close-modal-btn").addEventListener("click", () => profileModal.style.display = "none");
+        
         document.getElementById("save-profile-btn").addEventListener("click", async () => {
             const newName = document.getElementById("edit-name-input").value.trim();
             const newPic = document.getElementById("edit-pic-input").value.trim();
